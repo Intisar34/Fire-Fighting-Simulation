@@ -156,16 +156,21 @@ func handleMessage(manager map[string]interface{}, msg Message) {
 
 	case "nearest fire":
 
+		// Manager extracts x and y coordinates of the truck
+		// These come from the message sent by the truck
+
 		x, y := msg["x"].(int), msg["y"].(int)
 
 		minDistance := size * 2
+		
+		// Store the coordinates of the nearest fire (initialized to invalid -1)
 
 		fireX, fireY := -1, -1
 
 		for i := 0; i < size; i++ {
 			for j := 0; j < size; j++ {
 				if grid[i][j]["fire"].(bool) {
-					distance := (x - i) + (y - j) //calculate with absolute value
+					distance := manhattanDistance(x, y, i, j) // use Absolute value for positive coordinates
 					if distance < minDistance {
 						minDistance = distance
 						fireX, fireY = i, j
@@ -174,7 +179,7 @@ func handleMessage(manager map[string]interface{}, msg Message) {
 			}
 
 		}
-
+        // If fire is found in that cell
 		if fireX != -1 && fireY != -1 {
 			if msg["reply"] != nil {
 				msg["reply"].(chan Message) <- Message{
@@ -191,16 +196,17 @@ func handleMessage(manager map[string]interface{}, msg Message) {
 		}
 
 		return
-
+    
 	case "request water":
 
 		id := msg["from"].(string)
-		amount := msg["amount"].(int)
+		amount := msg["amount"].(int) // Extract the amount of water the truck is requesting
 
 		existingWater := manager["water"].(int)
 
 		if amount <= existingWater {
 			manager["water"] = existingWater - amount
+			// Send a confirmation reply to the truck 
 			if msg["reply"] != nil {
 				msg["reply"].(chan Message) <- Message{
 					"ok":   true,
@@ -208,7 +214,7 @@ func handleMessage(manager map[string]interface{}, msg Message) {
 					"left": manager["water"].(int),
 				}
 			}
-
+          //Not enough water to fulfill the full request, but some water is available
 		} else if amount > existingWater && existingWater != 0 {
 			if msg["reply"] != nil {
 				msg["reply"].(chan Message) <- Message{
@@ -220,6 +226,7 @@ func handleMessage(manager map[string]interface{}, msg Message) {
 			}
 
 		} else {
+			//No water is available at all
 			if msg["reply"] != nil {
 				msg["reply"].(chan Message) <- Message{
 					"ok":   false,
@@ -272,6 +279,60 @@ func handleMessage(manager map[string]interface{}, msg Message) {
 		}
 		return
 
+	
+
+	case "move":
+		id := msg["from"].(string)
+	    direction := msg["direction"].(string)
+
+		truckX,truckY := -1,-1
+
+		for i := 0; i < size; i++{
+			for j := 0; j <size; j++{
+				if grid[i][j]["truck"] == id{
+					truckX,truckY = i,j
+
+				}
+			}
+		}
+
+		newX,newY := truckX,truckY
+
+		switch direction{
+		case "n" :
+			newX = newX - 1
+		case "s" :
+			newX = newX + 1
+		case "e":
+			newY = newY + 1
+		case "w":
+			newY = newY - 1
+		}
+
+		if !inBounds(size, newX, newY) {
+			if msg["reply"] != nil {
+				msg["reply"].(chan Message) <- Message{"ok": false, "info": "out of bounds"}
+			}
+			return
+		}
+			
+		if grid[newX][newY]["truck"].(string) != "" {
+			if msg["reply"] != nil {
+				msg["reply"].(chan Message) <- Message{"ok": false, "info": "cell occupied"}
+			}
+			return
+		}
+
+		grid[truckX][truckY]["truck"] = ""
+		grid[newX][newY]["truck"] = id
+
+		if msg["reply"] != nil {
+			msg["reply"].(chan Message) <- Message{"ok": true, "info": "moved successfully"}
+		}
+		return
+
+		default:
+		 msg["reply"].(chan Message) <- Message{"ok": false}
 	}
 }
 
@@ -306,6 +367,18 @@ func spreadFires(manager map[string]interface{}) {
 			}
 		}
 	}
+}
+// function for absolute valiue
+func abs(a int) int {
+	if a < 0 {
+		return -a
+	}
+	return a
+}
+
+// calculate manhattan distance using the absolute value.
+func manhattanDistance(x1, y1, x2, y2 int) int {
+	return abs(x1-x2) + abs(y1-y2)
 }
 
 // Refill the global shared water supply
@@ -385,7 +458,7 @@ func registerTruck(truck map[string]interface{}) {
 	truck["mgr"].(chan Message) <- msg
 	<-truck["reply"].(chan Message)
 }
-
+//Request the nearest fire to the manager
 func requestNearestFire(truck map[string]interface{}) Message {
 
 	msg := Message{
@@ -400,7 +473,19 @@ func requestNearestFire(truck map[string]interface{}) Message {
 
 	return response
 }
-
+// request to move in the direction required to the manager
+func requestMove(truck map[string]interface{}, direction string) Message {
+	msg := Message{
+		"type":  "move",
+		"from":  truck["id"],
+		"direction": direction,
+		"reply":     truck["reply"],
+	}
+	truck["mgr"].(chan Message) <- msg
+	reply := <-truck["reply"].(chan Message)
+	return reply
+}
+// request water to the manager
 func requestWater(truck map[string]interface{}, amount int) Message {
 
 	msg := Message{
@@ -414,6 +499,19 @@ func requestWater(truck map[string]interface{}, amount int) Message {
 
 	return response
 
+}
+// decide the direction the truck will move based on the position of the fire
+func decideDirection(truckX, truckY, fireX, fireY int) string{
+	if truckX < fireX{
+		return "s"
+	} else if truckX > fireX {
+		return "n"
+	} else if truckY < fireY {
+		return "e"
+	} else if truckY > fireY {
+		return "w"
+	}
+	return ""
 }
 
 func extinguishFire(truck map[string]interface{}, amount int) Message {
@@ -435,16 +533,52 @@ func extinguishFire(truck map[string]interface{}, amount int) Message {
 func truckLoop(truck map[string]interface{}) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-	for {
-		// TODO for Task 0: add functionality:
-		// - request nearest fire*
-		// - decide movement direction
-		// - send move request*
-		// - send water request*
-		// - communicate (later for task 1)
-		// - extinguish fire*
+	for range ticker.C {
+
+		fireResponse := requestNearestFire(truck)
+
+        if !fireResponse["ok"].(bool) {
+          fmt.Printf("No fire found for truck %v\n", truck["id"])
+          continue
+}
+
+		fireX := fireResponse["x"].(int)
+		fireY := fireResponse["y"].(int)
+
+		truckX := truck["x"].(int)
+		truckY := truck["y"].(int)
+		
+		decision := decideDirection(truckX,truckY, fireX, fireY)
+
+	if decision == "" {
+			// Fire reached → extinguish it
+			fmt.Printf("🔥 Truck %v is at the fire location! Extinguishing...\n", truck["id"])
+			waterResp := requestWater(truck, 3)
+			fmt.Printf("💧 Water request: %v\n", waterResp)
+
+			extResp := extinguishFire(truck, 3)
+			fmt.Printf("🧯 Extinguish result: %v\n", extResp)
+			continue
+		}
+
+		moveResponse := requestMove(truck,decision)
+
+	if moveResponse["ok"].(bool) {
+	   switch decision {
+	    case "n":
+		  truck["x"] = truck["x"].(int) - 1
+	    case "s":
+		  truck["x"] = truck["x"].(int) + 1
+	    case "e":
+		  truck["y"] = truck["y"].(int) + 1
+	    case "w":
+		  truck["y"] = truck["y"].(int) - 1
 	}
 }
+	fmt.Printf("➡️ Truck %v moved %v: %v\n", truck["id"], decision, moveResponse)
+	}
+	}
+
 
 // ----------------------- Main -----------------------
 func main() {
