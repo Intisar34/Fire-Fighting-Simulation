@@ -19,21 +19,21 @@ func createManager(size int, waterCapacity int, refillRate int) map[string]inter
 		for j := 0; j < size; j++ {
 			grid[i][j] = map[string]interface{}{
 				"fire":      false,
-				"intensity": float64(0),
+				"intensity": 0.0,
 				"truck":     "",
 			}
 		}
 	}
 	return map[string]interface{}{
 		"grid":   grid,
-		"water":  float64(waterCapacity),
-		"max":    float64(waterCapacity),
-		"refill": float64(refillRate),
+		"water":  waterCapacity,
+		"max":    waterCapacity,
+		"refill": refillRate,
 	}
 }
 
 // Run the central manager
-func runManager(manager map[string]interface{}, stopAfter int, tick time.Duration, done chan struct{}) {
+func runManager(manager map[string]interface{}, stopAfter int, tick time.Duration, done chan struct{},nc * nats.Conn) {
 	grid := manager["grid"].([][]map[string]interface{})
 	size := len(grid)
 
@@ -49,7 +49,7 @@ func runManager(manager map[string]interface{}, stopAfter int, tick time.Duratio
 		}
 
 		if rand.Float32() < 0.5 {
-			addFire(manager, rand.Intn(size), rand.Intn(size))
+			addFire(manager, rand.Intn(size), rand.Intn(size),nc) // keep int here
 		}
 
 		refillWater(manager)
@@ -67,29 +67,46 @@ func runManager(manager map[string]interface{}, stopAfter int, tick time.Duratio
 
 // --- Helper Functions ---
 func inBounds(size, x, y int) bool {
-
 	return x >= 0 && x < size && y >= 0 && y < size
 }
 
-func addFire(manager map[string]interface{}, x, y int) {
-
+// FIX: accept int, not float64
+func addFire(manager map[string]interface{}, x, y int, nc *nats.Conn) {
 	grid := manager["grid"].([][]map[string]interface{})
 	if !grid[x][y]["fire"].(bool) {
+		intensity := float64(rand.Intn(3) + 1)
 		grid[x][y]["fire"] = true
-		grid[x][y]["intensity"] = float64(rand.Intn(3) + 1)
+		grid[x][y]["intensity"] = intensity
+
+		// Publish fire update
+		msg := Message{
+			"type":      "new fire",
+			"x":         x,
+			"y":         y,
+			"intensity": intensity,
+		}
+		data, _ := json.Marshal(msg)
+		err := nc.Publish("fires.updates", data)
+
+		if err != nil {
+			fmt.Println("Error publishing fire update:", err)
+		} else {
+			fmt.Println("🔥 Published new fire at:", x, y)
+		}
 	}
 }
 
-func spreadFires(manager map[string]interface{}) {
 
+
+func spreadFires(manager map[string]interface{}) {
 	grid := manager["grid"].([][]map[string]interface{})
 	size := len(grid)
 	for i := 0; i < size; i++ {
 		for j := 0; j < size; j++ {
 			cell := grid[i][j]
 			if cell["fire"].(bool) {
-				cell["intensity"] = cell["intensity"].(float64) + 1.0
-				if cell["intensity"].(float64) > 10.0 {
+				cell["intensity"] = cell["intensity"].(float64) + 1
+				if cell["intensity"].(float64) > 10 {
 					cell["intensity"] = 10.0
 				}
 			}
@@ -98,9 +115,9 @@ func spreadFires(manager map[string]interface{}) {
 }
 
 func refillWater(manager map[string]interface{}) {
-	w := manager["water"].(float64) + manager["refill"].(float64)
-	if w > manager["max"].(float64) {
-		w = manager["max"].(float64)
+	w := manager["water"].(int) + manager["refill"].(int)
+	if w > manager["max"].(int) {
+		w = manager["max"].(int)
 	}
 	manager["water"] = w
 }
@@ -172,14 +189,11 @@ func Responder(nc *nats.Conn, manager map[string]interface{}) error {
 }
 
 func handleRequest(manager map[string]interface{}, req Message) Message {
-
 	grid := manager["grid"].([][]map[string]interface{})
 	size := len(grid)
-
 	reply := Message{}
 
 	switch req["type"] {
-
 	case "register":
 		x := int(req["x"].(float64))
 		y := int(req["y"].(float64))
@@ -204,7 +218,6 @@ func handleRequest(manager map[string]interface{}, req Message) Message {
 		return reply
 
 	case "nearest fire":
-
 		x := int(req["x"].(float64))
 		y := int(req["y"].(float64))
 		minDistance := size * 2
@@ -217,7 +230,6 @@ func handleRequest(manager map[string]interface{}, req Message) Message {
 					if distance < minDistance {
 						minDistance = distance
 						fireX, fireY = i, j
-
 					}
 				}
 			}
@@ -226,11 +238,10 @@ func handleRequest(manager map[string]interface{}, req Message) Message {
 		if fireX != -1 && fireY != -1 {
 			reply["ok"] = true
 			reply["info"] = "Fire found!"
-			reply["x"] = fireX
-			reply["y"] = fireY
+			reply["x"] = float64(fireX)
+			reply["y"] = float64(fireY)
 			reply["distance"] = minDistance
-			reply["intensity"] = int(grid[fireX][fireY]["intensity"].(float64))
-
+			reply["intensity"] = grid[fireX][fireY]["intensity"].(float64)
 		} else {
 			reply["ok"] = false
 			reply["info"] = "No fire on grid"
@@ -240,47 +251,43 @@ func handleRequest(manager map[string]interface{}, req Message) Message {
 	case "request water":
 		id := req["from"].(string)
 		amount := int(req["amount"].(float64))
-		existingWater := int(manager["water"].(float64))
+		existingWater := manager["water"].(int)
 
 		if amount <= existingWater {
-			manager["water"] = float64(existingWater - amount)
+			manager["water"] = existingWater - amount
 			reply["ok"] = true
 			reply["info"] = fmt.Sprintf("Truck %s has received %d units of water", id, amount)
-			reply["left"] = int(manager["water"].(float64))
-
+			reply["left"] = manager["water"].(int)
 		} else if existingWater != 0 {
-			manager["water"] = float64(0)
+			manager["water"] = 0
 			reply["ok"] = true
 			reply["info"] = fmt.Sprintf("Not enough water, truck %s received %d units of water", id, existingWater)
-			reply["left"] = float64(0)
-
+			reply["left"] = 0
 		} else {
 			reply["ok"] = false
 			reply["info"] = "No water available"
-			reply["left"] = float64(0)
+			reply["left"] = 0
 		}
 		return reply
 
 	case "extinguish fire":
 		x := int(req["x"].(float64))
 		y := int(req["y"].(float64))
-		amount := int(req["amount"].(float64))
+		amount := req["amount"].(float64)
 
 		if grid[x][y]["fire"].(bool) {
-			intensity := int(grid[x][y]["intensity"].(float64))
+			intensity := grid[x][y]["intensity"].(float64)
 			if amount >= intensity {
 				grid[x][y]["fire"] = false
-				grid[x][y]["intensity"] = float64(0)
+				grid[x][y]["intensity"] = 0.0
 				reply["ok"] = true
 				reply["info"] = fmt.Sprintf("Fire at %d,%d was extinguished!", x, y)
-				reply["remaining"] = float64(0)
-
+				reply["remaining"] = 0.0
 			} else {
 				grid[x][y]["intensity"] = intensity - amount
 				reply["ok"] = true
-				reply["info"] = fmt.Sprintf("Fire at %d,%d reduced to intensity %d!", x, y, int(grid[x][y]["intensity"].(float64)))
-				reply["remaining"] = int(grid[x][y]["intensity"].(float64))
-
+				reply["info"] = fmt.Sprintf("Fire at %d,%d reduced to intensity %.1f!", x, y, grid[x][y]["intensity"].(float64))
+				reply["remaining"] = grid[x][y]["intensity"].(float64)
 			}
 		} else {
 			return Message{"ok": false, "info": "No fire at this location"}
@@ -291,35 +298,31 @@ func handleRequest(manager map[string]interface{}, req Message) Message {
 	case "request move":
 		id := req["from"].(string)
 		direction := req["direction"].(string)
-
 		truckX, truckY := -1, -1
 
 		for i := 0; i < size; i++ {
 			for j := 0; j < size; j++ {
 				if grid[i][j]["truck"] == id {
 					truckX, truckY = i, j
-
 				}
 			}
 		}
 
 		newX, newY := truckX, truckY
-
 		switch direction {
 		case "n":
-			newX = newX - 1
+			newX--
 		case "s":
-			newX = newX + 1
+			newX++
 		case "e":
-			newY = newY + 1
+			newY++
 		case "w":
-			newY = newY - 1
+			newY--
 		}
 
 		if !inBounds(size, newX, newY) {
 			return Message{"ok": false, "info": "out of bounds"}
 		}
-
 		if grid[newX][newY]["truck"].(string) != "" {
 			return Message{"ok": false, "info": "cell occupied"}
 		}
