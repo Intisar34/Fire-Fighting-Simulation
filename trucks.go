@@ -160,6 +160,7 @@ func checkForFire(gridmap map[string]interface{}, truck FireTruck) bool {
 	return cell["fire"].(bool)
 }
 
+// Listens for water requests from other trucks
 func (t *FireTruck) ListenForWaterRequests() {
 	t.Conn.Subscribe("water.request", func(msg *nats.Msg) {
 		var req map[string]interface{}
