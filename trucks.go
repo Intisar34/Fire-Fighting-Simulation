@@ -200,23 +200,29 @@ func (t *FireTruck) RequestWater(amount float64) bool {
 	}
 	data, _ := json.Marshal(request)
 
+	// Subscribe to the reply channel for this request
 	sub, _ := t.Conn.SubscribeSync(fmt.Sprintf("water.reply.%s", request["request_id"]))
 	defer sub.Unsubscribe()
 
+	// Publish the request to the "water.request" subject
 	t.Conn.PublishRequest("water.request", fmt.Sprintf("water.reply.%s", request["request_id"]), data)
 
 	approvals := 0
 	denials := 0
 	timeout := time.After(1 * time.Second)
 
+	// Track which trucks have replied
 	repliedTrucks := make(map[string]bool)
 
+	// Collect replies from other trucks for this water request.
 collectLoop:
 	for {
 		select {
 		case <-timeout:
 			break collectLoop
 		default:
+
+			// Waits for the next message with a short timeout
 			msg, err := sub.NextMsg(200 * time.Millisecond)
 			if err != nil {
 				continue
@@ -242,6 +248,8 @@ collectLoop:
 	fmt.Printf("📊 %s got %d approvals / %d denials\n", t.ID, approvals, denials)
 
 	if approvals >= requiredApprovals {
+
+		// Ensure we don't exceed max water per timestep
 		remaining := maxWaterPerTimestep - waterDeliveredThisStep
 		if remaining <= 0 {
 			fmt.Printf("🚫 %s cannot receive water this timestep (limit reached)\n", t.ID)
@@ -268,6 +276,7 @@ collectLoop:
 	return false
 }
 
+// isNearFire checks the 4 neighboring cells around the truck
 func isNearFire(gridmap map[string]interface{}, truck FireTruck) (bool, int, int) {
 	grid := gridmap["grid"].([][]map[string]interface{})
 	size := len(grid)
@@ -304,7 +313,7 @@ func extinguishFire(gridmap map[string]interface{}, truck *FireTruck, fx, fy int
 	cell["fire"] = false
 	fmt.Printf("🔥 Fire at (%d,%d) extinguished by %s!\n", fx, fy, truck.ID)
 
-	// Publish event
+	// Publish event to notify other trucks
 	msg := fmt.Sprintf("%s extinguished fire at (%d,%d)", truck.ID, fx, fy)
 	nc.Publish("fire.extinguished", []byte(msg))
 
