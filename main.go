@@ -1,62 +1,58 @@
 package main
 
 import (
-	"fmt"
-	"math/rand"
-	"time"
-
-	"github.com/nats-io/nats.go"
+    "fmt"
+    "math/rand"
+    "time"
+    "github.com/nats-io/nats.go"
 )
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
+    rand.Seed(time.Now().UnixNano())
 
-	//Establishes NATS connection
-	nc, err := nats.Connect(nats.DefaultURL)
-	if err != nil {
-		panic(err)
-	}
-	defer nc.Drain()
+    // NATS connection
+    nc, err := nats.Connect(nats.DefaultURL)
+    if err != nil {
+        panic(err)
+    }
+    defer nc.Drain()
 
-	// Create the central manager (with arbitrary example values)
-	manager := createManager(20, 500, 20)
+    // Create grid
+    gridmap := createGrid(20, maxGlobalWater, 20)
 
-	//Starts the NATS based responder
-	err = Responder(nc, manager)
-	if err != nil {
-		panic(err)
-	}
+    // Spawn fires and trucks
+    spawnFires(gridmap, 5)
+    numTrucks := 5
+    trucks := spawnTrucks(gridmap, numTrucks, nc)
 
-	// Create the 'done' channel to signal when the simulation is over
-	done := make(chan struct{})
+    // Each truck listens for water requests once
+    for i := range trucks {
+        trucks[i].ListenForWaterRequests()
+    }
 
-	// Run the manager for 50 timesteps with 2 seconds per timestep
-	go runManager(manager, 50, 2*time.Second, done,nc)
+    // Subscribe to fire-extinguished events
+    nc.Subscribe("fire.extinguished", func(m *nats.Msg) {
+        fmt.Printf("📢 Event: %s\n", string(m.Data))
+    })
 
-	// Create two initial fires at random grid positions (example)
-	addFire(manager, rand.Intn(20), rand.Intn(20),nc)
-	addFire(manager, rand.Intn(20), rand.Intn(20),nc)
+    // Simulation loop
+    timesteps := 50
+    for t := 0; t < timesteps; t++ {
+        waterDeliveredThisStep = 0
+        fmt.Printf("\n⏱ Time step %d\n", t+1)
 
-	// Create, register, and run 2 firetrucks at random grid positions (example)
-	truck1 := createTruck("T1", float64(rand.Intn(20)), float64(rand.Intn(20)), nc)
-	truck2 := createTruck("T2", float64(rand.Intn(20)), float64(rand.Intn(20)), nc)
+        for i := range trucks {
+            if near, fx, fy := isNearFire(gridmap, trucks[i]); near {
+                extinguishFire(gridmap, &trucks[i], fx, fy, nc)
+            } else {
+                moveTruckRandomly(gridmap, &trucks[i])
+            }
+        }
 
-	ListenForFires(truck1)
-    ListenForFires(truck2)
+        display(gridmap)
+        fmt.Printf("Water: %.0f / %.0f\n", globalWater, maxGlobalWater)
+        time.Sleep(1 * time.Second)
+    }
 
-	if _, err := registerTruck(truck1); err != nil {
-		fmt.Println("Error registering truck1:", err)
-	}
-	if _, err := registerTruck(truck2); err != nil {
-		fmt.Println("Error registering truck2:", err)
-	}
-
-	ListenForFires(truck1)
-    ListenForFires(truck2)
-	
-	go truckLoop(truck1, done)
-	go truckLoop(truck2, done)
-
-	// Finish simulation once the manager signals completion
-	<-done
+    fmt.Println("Simulation finished.")
 }
