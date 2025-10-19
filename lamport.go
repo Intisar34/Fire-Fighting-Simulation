@@ -2,14 +2,13 @@ package main
 
 import "sync"
 
-// LamportClock represents a logical clock following Lamport's algorithm.
 // Each FireTruck instance will have its own clock.
 type LamportClock struct {
 	mu   sync.Mutex
 	time int
 }
 
-// Increment increases the local clock for an internal event (send or local action).
+// Increment increases the local clock for an event.
 func (lc *LamportClock) Increment() int {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
@@ -28,7 +27,7 @@ func (lc *LamportClock) Update(received int) int {
 	return lc.time
 }
 
-// Time returns the current clock value safely.
+// Time returns the current clock value.
 func (lc *LamportClock) Time() int {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
