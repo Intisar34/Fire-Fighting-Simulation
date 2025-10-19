@@ -10,10 +10,11 @@ import (
 )
 
 type FireTruck struct {
-	ID   string
-	X, Y int
-	Conn *nats.Conn
-	Busy bool
+	ID    string
+	X, Y  int
+	Conn  *nats.Conn
+	Busy  bool
+	Clock *LamportClock // Added Lamport clock
 }
 
 var globalWater = 300.0
@@ -107,10 +108,11 @@ func spawnTrucks(gridmap map[string]interface{}, numTrucks int, nc *nats.Conn) [
 		y := rand.Intn(size)
 		grid[x][y]["truck"] = fmt.Sprintf("T%d", i+1)
 		trucks[i] = FireTruck{
-			ID:   fmt.Sprintf("T%d", i+1),
-			X:    x,
-			Y:    y,
-			Conn: nc,
+			ID:    fmt.Sprintf("T%d", i+1),
+			X:     x,
+			Y:     y,
+			Conn:  nc,
+			Clock: &LamportClock{}, // Added clock initialization
 		}
 	}
 
@@ -152,6 +154,10 @@ func moveTruckRandomly(gridmap map[string]interface{}, truck *FireTruck) {
 
 	// Update new position
 	grid[truck.X][truck.Y]["truck"] = truck.ID
+
+	// Log move with Lamport timestamp
+	timestamp := truck.Clock.Increment()
+	fmt.Printf("[%d] %s moved to (%d,%d)\n", timestamp, truck.ID, truck.X, truck.Y)
 }
 
 func checkForFire(gridmap map[string]interface{}, truck FireTruck) bool {
@@ -168,6 +174,10 @@ func (t *FireTruck) ListenForWaterRequests() {
 		requester := req["truck_id"].(string)
 		needed := req["needed"].(float64)
 		requestID := req["request_id"].(string)
+		receivedTS := int(req["timestamp"].(float64)) // added timestamp field
+
+		// Update Lamport clock on receive
+		t.Clock.Update(receivedTS)
 
 		// Ignore if this truck made the request
 		if requester == t.ID {
@@ -175,7 +185,9 @@ func (t *FireTruck) ListenForWaterRequests() {
 		}
 
 		status := "approved"
-		if globalWater < needed {
+
+		// Mutual exclusion using Lamport timestamps + truck ID tie-break
+		if receivedTS > t.Clock.Time() || (receivedTS == t.Clock.Time() && requester > t.ID) {
 			status = "denied"
 		}
 
@@ -183,20 +195,24 @@ func (t *FireTruck) ListenForWaterRequests() {
 			"approver":   t.ID,
 			"request_id": requestID,
 			"status":     status,
+			"timestamp":  t.Clock.Increment(), // include timestamp in reply
 		}
 
 		data, _ := json.Marshal(reply)
 		msg.Respond(data)
-		fmt.Printf("💬 %s replied '%s' to %s’s request.\n", t.ID, status, requester)
-
+		fmt.Printf("[%d] 💬 %s replied '%s' to %s’s request.\n", t.Clock.Time(), t.ID, status, requester)
 	})
 }
 
 func (t *FireTruck) RequestWater(amount float64) bool {
+	timestamp := t.Clock.Increment()
+	fmt.Printf("[%d] %s requesting %.0f units of water\n", timestamp, t.ID, amount)
+
 	request := map[string]interface{}{
 		"truck_id":   t.ID,
 		"needed":     amount,
 		"request_id": fmt.Sprintf("%s-%d", t.ID, time.Now().UnixNano()),
+		"timestamp":  timestamp, // include timestamp
 	}
 	data, _ := json.Marshal(request)
 
@@ -230,6 +246,12 @@ collectLoop:
 
 			var reply map[string]interface{}
 			json.Unmarshal(msg.Data, &reply)
+
+			// Update Lamport clock with reply timestamp
+			if ts, ok := reply["timestamp"].(float64); ok {
+				t.Clock.Update(int(ts))
+			}
+
 			truckID := reply["approver"].(string)
 			if repliedTrucks[truckID] {
 				continue
@@ -241,18 +263,20 @@ collectLoop:
 			} else {
 				denials++
 			}
+
+			fmt.Printf("[%d] %s received '%s' from %s\n", t.Clock.Time(), t.ID, reply["status"], truckID)
 		}
 	}
 
 	requiredApprovals := 3
-	fmt.Printf("📊 %s got %d approvals / %d denials\n", t.ID, approvals, denials)
+	fmt.Printf("[%d] 📊 %s got %d approvals / %d denials\n", t.Clock.Time(), t.ID, approvals, denials)
 
 	if approvals >= requiredApprovals {
 
 		// Ensure we don't exceed max water per timestep
 		remaining := maxWaterPerTimestep - waterDeliveredThisStep
 		if remaining <= 0 {
-			fmt.Printf("🚫 %s cannot receive water this timestep (limit reached)\n", t.ID)
+			fmt.Printf("[%d] 🚫 %s cannot receive water this timestep (limit reached)\n", t.Clock.Time(), t.ID)
 			return false
 		}
 
@@ -263,16 +287,16 @@ collectLoop:
 		if globalWater >= amount {
 			globalWater -= amount
 			waterDeliveredThisStep += amount
-			fmt.Printf("💧 %s received %.0f units of water! Remaining global water: %.0f\n",
-				t.ID, amount, globalWater)
+			fmt.Printf("[%d] 💧 %s received %.0f units of water! Remaining global water: %.0f\n",
+				t.Clock.Time(), t.ID, amount, globalWater)
 			return true
 		} else {
-			fmt.Printf("🚫 %s was approved, but global water insufficient.\n", t.ID)
+			fmt.Printf("[%d] 🚫 %s was approved, but global water insufficient.\n", t.Clock.Time(), t.ID)
 			return false
 		}
 	}
 
-	fmt.Printf("🚫 %s did not receive enough approvals (needed %d).\n", t.ID, requiredApprovals)
+	fmt.Printf("[%d] 🚫 %s did not receive enough approvals (needed %d).\n", t.Clock.Time(), t.ID, requiredApprovals)
 	return false
 }
 
@@ -304,6 +328,8 @@ func extinguishFire(gridmap map[string]interface{}, truck *FireTruck, fx, fy int
 	}
 
 	// Request water equal to fire intensity
+	timestamp := truck.Clock.Increment()
+	fmt.Printf("[%d] %s attempting to extinguish fire at (%d,%d)\n", timestamp, truck.ID, fx, fy)
 	success := truck.RequestWater(intensity)
 	if !success {
 		return
@@ -311,10 +337,9 @@ func extinguishFire(gridmap map[string]interface{}, truck *FireTruck, fx, fy int
 
 	cell["intensity"] = 0
 	cell["fire"] = false
-	fmt.Printf("🔥 Fire at (%d,%d) extinguished by %s!\n", fx, fy, truck.ID)
+	fmt.Printf("[%d] 🔥 Fire at (%d,%d) extinguished by %s!\n", truck.Clock.Increment(), fx, fy, truck.ID)
 
 	// Publish event to notify other trucks
 	msg := fmt.Sprintf("%s extinguished fire at (%d,%d)", truck.ID, fx, fy)
 	nc.Publish("fire.extinguished", []byte(msg))
-
 }
