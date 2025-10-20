@@ -10,6 +10,14 @@ type FireTruck struct {
 	Clock *LamportClock // Added Lamport clock
 }
 
+type FireClaim struct {
+	TruckID   string  `json:"truck_id"`
+	FireX     int     `json:"fire_x"`
+	FireY     int     `json:"fire_y"`
+	Distance  float64 `json:"distance"`
+	Timestamp int     `json:"timestamp"`
+}
+
 var (
 	globalWater            = 300.0
 	maxGlobalWater         = 300.0

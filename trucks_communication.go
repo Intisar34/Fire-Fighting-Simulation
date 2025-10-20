@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"math/rand"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -42,6 +44,7 @@ func (t *FireTruck) ListenForWaterRequests() {
 
 		data, _ := json.Marshal(reply)
 		msg.Respond(data)
+		fmt.Printf("[%d] %s replied '%s' to %s’s request.\n", t.Clock.Time(), t.ID, status, requester)
 	})
 }
 
@@ -53,78 +56,60 @@ func (t *FireTruck) RequestWater(amount float64) bool {
 		"truck_id":   t.ID,
 		"needed":     amount,
 		"request_id": fmt.Sprintf("%s-%d", t.ID, time.Now().UnixNano()),
-		"timestamp":  timestamp, // include timestamp
+		"timestamp":  timestamp,
 	}
 	data, _ := json.Marshal(request)
 
-	// Subscribe to the reply channel for this request
 	sub, _ := t.Conn.SubscribeSync(fmt.Sprintf("water.reply.%s", request["request_id"]))
 	defer sub.Unsubscribe()
 
-	// Publish the request to the "water.request" subject
 	t.Conn.PublishRequest("water.request", fmt.Sprintf("water.reply.%s", request["request_id"]), data)
 
 	approvals := 0
 	denials := 0
-	timeout := time.After(1 * time.Second)
-
-	// Track which trucks have replied
 	repliedTrucks := make(map[string]bool)
+	deadline := time.Now().Add(1 * time.Second)
 
-	// Collect replies from other trucks for this water request.
-collectLoop:
-	for {
-		select {
-		case <-timeout:
-			break collectLoop
-		default:
-
-			// Waits for the next message with a short timeout
-			msg, err := sub.NextMsg(200 * time.Millisecond)
-			if err != nil {
-				continue
-			}
-
-			var reply map[string]interface{}
-			json.Unmarshal(msg.Data, &reply)
-
-			// Update Lamport clock with reply timestamp
-			if ts, ok := reply["timestamp"].(float64); ok {
-				t.Clock.Update(int(ts))
-			}
-
-			truckID := reply["approver"].(string)
-			if repliedTrucks[truckID] {
-				continue
-			}
-			repliedTrucks[truckID] = true
-
-			if reply["status"] == "approved" {
-				approvals++
-			} else {
-				denials++
-			}
-
-			fmt.Printf("[%d] %s received '%s' from %s\n", t.Clock.Time(), t.ID, reply["status"], truckID)
+	for time.Now().Before(deadline) {
+		msg, err := sub.NextMsg(200 * time.Millisecond)
+		if err != nil {
+			continue
 		}
+
+		var reply map[string]interface{}
+		json.Unmarshal(msg.Data, &reply)
+
+		if ts, ok := reply["timestamp"].(float64); ok {
+			t.Clock.Update(int(ts))
+		}
+
+		truckID := reply["approver"].(string)
+		if repliedTrucks[truckID] {
+			continue
+		}
+		repliedTrucks[truckID] = true
+
+		if reply["status"] == "approved" {
+			approvals++
+		} else {
+			denials++
+		}
+
+		fmt.Printf("[%d] %s received '%s' from %s\n", t.Clock.Time(), t.ID, reply["status"], truckID)
 	}
 
 	requiredApprovals := 3
 	fmt.Printf("[%d] %s got %d approvals / %d denials\n", t.Clock.Time(), t.ID, approvals, denials)
 
 	if approvals >= requiredApprovals {
-
-		// Ensure we don't exceed max water per timestep
 		remaining := maxWaterPerTimestep - waterDeliveredThisStep
 		if remaining <= 0 {
 			fmt.Printf("[%d] %s cannot receive water this timestep (limit reached)\n", t.Clock.Time(), t.ID)
 			return false
 		}
-
 		if amount > remaining {
 			amount = remaining
 		}
-
 		if globalWater >= amount {
 			globalWater -= amount
 			waterDeliveredThisStep += amount
@@ -139,4 +124,59 @@ collectLoop:
 
 	fmt.Printf("[%d] %s did not receive enough approvals (needed %d).\n", t.Clock.Time(), t.ID, requiredApprovals)
 	return false
+}
+
+func (t *FireTruck) ListenForFires(gridmap map[string]interface{}) {
+	t.Conn.Subscribe("new.fire", func(msg *nats.Msg) {
+		var fire map[string]int
+		json.Unmarshal(msg.Data, &fire)
+		fx, fy := fire["x"], fire["y"]
+
+		// Calculate distance
+		dist := math.Abs(float64(t.X-fx)) + math.Abs(float64(t.Y-fy))
+
+		// Simulate random small delay to avoid collisions
+		time.Sleep(time.Duration(rand.Intn(200)) * time.Millisecond)
+
+		// Publish claim
+		claim := FireClaim{
+			TruckID:   t.ID,
+			FireX:     fx,
+			FireY:     fy,
+			Distance:  dist,
+			Timestamp: t.Clock.Increment(),
+		}
+		data, _ := json.Marshal(claim)
+		t.Conn.Publish("fire.claim", data)
+
+		fmt.Printf("[%d] %s detected fire at (%d,%d), distance %.1f\n", t.Clock.Time(), t.ID, fx, fy, dist)
+	})
+}
+
+func (t *FireTruck) ListenForClaims(gridmap map[string]interface{}) {
+	t.Conn.Subscribe("fire.claim", func(msg *nats.Msg) {
+		var claim FireClaim
+		json.Unmarshal(msg.Data, &claim)
+
+		// Ignore own claims
+		if claim.TruckID == t.ID {
+			return
+		}
+
+		key := fmt.Sprintf("%d,%d", claim.FireX, claim.FireY)
+		current := gridmap[key]
+
+		// Update Lamport clock
+		t.Clock.Update(claim.Timestamp)
+
+		// Compare distances or use ID as tie-breaker
+		if currClaim, ok := current.(FireClaim); ok {
+			if claim.Distance < currClaim.Distance ||
+				(claim.Distance == currClaim.Distance && claim.TruckID < currClaim.TruckID) {
+				gridmap[key] = claim
+			}
+		} else {
+			gridmap[key] = claim
+		}
+	})
 }

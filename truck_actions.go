@@ -48,10 +48,30 @@ func moveTruckRandomly(gridmap map[string]interface{}, truck *FireTruck) {
 	fmt.Printf("[%d] %s moved to (%d,%d)\n", timestamp, truck.ID, truck.X, truck.Y)
 }
 
-func checkForFire(gridmap map[string]interface{}, truck FireTruck) bool {
+func (t *FireTruck) MoveTowardFire(gridmap map[string]interface{}, fx, fy int) {
 	grid := gridmap["grid"].([][]map[string]interface{})
-	cell := grid[truck.X][truck.Y]
-	return cell["fire"].(bool)
+	size := len(grid)
+
+	// Clear old position
+	grid[t.X][t.Y]["truck"] = ""
+
+	if t.X < fx {
+		t.X++
+	} else if t.X > fx {
+		t.X--
+	}
+	if t.Y < fy {
+		t.Y++
+	} else if t.Y > fy {
+		t.Y--
+	}
+
+	// Update new position
+	if t.X >= 0 && t.X < size && t.Y >= 0 && t.Y < size {
+		grid[t.X][t.Y]["truck"] = t.ID
+	}
+
+	fmt.Printf("[%d] 🚛 %s moving toward fire (%d,%d)\n", t.Clock.Increment(), t.ID, fx, fy)
 }
 
 // isNearFire checks the 4 neighboring cells around the truck

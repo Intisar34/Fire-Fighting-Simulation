@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
 
@@ -68,7 +69,7 @@ func display(gridmap map[string]interface{}) {
 }
 
 // Creates random fires on the grid
-func spawnFires(gridmap map[string]interface{}, numFires int) {
+func spawnFires(gridmap map[string]interface{}, numFires int, nc *nats.Conn) {
 	grid := gridmap["grid"].([][]map[string]interface{})
 	size := len(grid)
 
@@ -78,6 +79,16 @@ func spawnFires(gridmap map[string]interface{}, numFires int) {
 		cell := grid[x][y]
 		cell["fire"] = true
 		cell["intensity"] = float64(rand.Intn(10) + 1)
+
+		msg := map[string]int{
+			"x": x,
+			"y": y,
+		}
+
+		data, _ := json.Marshal(msg)
+		nc.Publish("new.fire", data)
+		fmt.Printf("🔥 New fire spawned at (%d,%d) with intensity %.0f\n", x, y, cell["intensity"])
+
 	}
 
 }

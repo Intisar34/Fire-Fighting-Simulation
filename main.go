@@ -22,18 +22,20 @@ func main() {
 	gridmap := createGrid(20, maxGlobalWater, 20)
 
 	// Spawn fires and trucks
-	spawnFires(gridmap, 5)
-	numTrucks := 5
+	spawnFires(gridmap, 5, nc)
 	trucks := spawnTrucks(gridmap, numTrucks, nc)
 
 	// Each truck listens for water requests once
 	for i := range trucks {
 		trucks[i].ListenForWaterRequests()
+		trucks[i].ListenForFires(gridmap)
+		trucks[i].ListenForClaims(gridmap)
+
 	}
 
 	// Subscribe to fire-extinguished events
 	nc.Subscribe("fire.extinguished", func(m *nats.Msg) {
-		fmt.Printf("📢 Event: %s\n", string(m.Data))
+		fmt.Printf("Event: %s\n", string(m.Data))
 	})
 
 	// Simulation loop
@@ -43,7 +45,11 @@ func main() {
 		fmt.Printf("\n⏱ Time step %d\n", t+1)
 
 		for i := range trucks {
-			if near, fx, fy := isNearFire(gridmap, trucks[i]); near {
+			// See if this truck has a claimed fire
+			claimKey := fmt.Sprintf("%d,%d", trucks[i].X, trucks[i].Y)
+			if claim, ok := gridmap[claimKey].(FireClaim); ok && claim.TruckID == trucks[i].ID {
+				trucks[i].MoveTowardFire(gridmap, claim.FireX, claim.FireY)
+			} else if near, fx, fy := isNearFire(gridmap, trucks[i]); near {
 				extinguishFire(gridmap, &trucks[i], fx, fy, nc)
 			} else {
 				moveTruckRandomly(gridmap, &trucks[i])
