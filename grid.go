@@ -83,7 +83,7 @@ func spawnFires(gridmap map[string]interface{}, numFires int, nc *nats.Conn) {
 		cell := grid[x][y]
 		cell["fire"] = true
 		cell["intensity"] = float64(rand.Intn(10) + 1)
-<<<<<<< Updated upstream
+		cell["fire_id"] = createFireID(x,y)
 
 		msg := map[string]int{
 			"x": x,
@@ -94,9 +94,6 @@ func spawnFires(gridmap map[string]interface{}, numFires int, nc *nats.Conn) {
 		nc.Publish("new.fire", data)
 		fmt.Printf("🔥 New fire spawned at (%d,%d) with intensity %.0f\n", x, y, cell["intensity"])
 
-=======
-		cell["fire_id"] = createFireID(x,y)
->>>>>>> Stashed changes
 	}
 
 }
