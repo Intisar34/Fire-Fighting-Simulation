@@ -45,6 +45,8 @@ This project simulates a decentralized forest fire management system where multi
 
 `go run main.go types.go grid.go truck_actions.go trucks_communication.go lamport.go`
 
+## Presentation Link
+https://www.canva.com/design/DAG2VqXdBGE/7cOpl69TD-Q4BO3mm5Md8w/view?utm_content=DAG2VqXdBGE&utm_campaign=designshare&utm_medium=link2&utm_source=uniquelinks&utlId=ha8051b3bfc
 
 ## Contribution
 - Anisa Hashi
