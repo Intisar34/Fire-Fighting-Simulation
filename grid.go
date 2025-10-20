@@ -1,9 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
-
 	"github.com/nats-io/nats.go"
 )
 
@@ -16,6 +16,7 @@ func createGrid(size int, waterCapacity float64, refillRate int) map[string]inte
 				"fire":      false,
 				"intensity": 0.0,
 				"truck":     "",
+				"fire_id": "",
 			}
 		}
 	}
@@ -67,8 +68,12 @@ func display(gridmap map[string]interface{}) {
 	}
 }
 
+func createFireID(x,y int) string { // flat naming strategy
+	return fmt.Sprintf("Fire -(%d,%d)", x,y)
+}
+
 // Creates random fires on the grid
-func spawnFires(gridmap map[string]interface{}, numFires int) {
+func spawnFires(gridmap map[string]interface{}, numFires int, nc *nats.Conn) {
 	grid := gridmap["grid"].([][]map[string]interface{})
 	size := len(grid)
 
@@ -78,6 +83,17 @@ func spawnFires(gridmap map[string]interface{}, numFires int) {
 		cell := grid[x][y]
 		cell["fire"] = true
 		cell["intensity"] = float64(rand.Intn(10) + 1)
+		cell["fire_id"] = createFireID(x,y)
+
+		msg := map[string]int{
+			"x": x,
+			"y": y,
+		}
+
+		data, _ := json.Marshal(msg)
+		nc.Publish("new.fire", data)
+		fmt.Printf("🔥 New fire spawned at (%d,%d) with intensity %.0f\n", x, y, cell["intensity"])
+
 	}
 
 }
@@ -91,9 +107,10 @@ func spawnTrucks(gridmap map[string]interface{}, numTrucks int, nc *nats.Conn) [
 	for i := 0; i < numTrucks; i++ {
 		x := rand.Intn(size)
 		y := rand.Intn(size)
-		grid[x][y]["truck"] = fmt.Sprintf("T%d", i+1)
+		truckID := fmt.Sprintf("Truck-%d", i+1) //flat naming strategy
+		grid[x][y]["truck"] = truckID
 		trucks[i] = FireTruck{
-			ID:    fmt.Sprintf("T%d", i+1),
+			ID:    truckID,
 			X:     x,
 			Y:     y,
 			Conn:  nc,
@@ -101,5 +118,8 @@ func spawnTrucks(gridmap map[string]interface{}, numTrucks int, nc *nats.Conn) [
 		}
 	}
 
+	for _, t := range trucks {
+     activeTrucks[t.ID] = true
+}
 	return trucks
 }
