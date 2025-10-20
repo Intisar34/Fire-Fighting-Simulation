@@ -14,7 +14,7 @@ type FireTruck struct {
 	X, Y  int
 	Conn  *nats.Conn
 	Busy  bool
-	Clock *LamportClock // Added Lamport clock
+	Clock *LamportClock
 }
 
 var globalWater = 300.0
@@ -112,7 +112,7 @@ func spawnTrucks(gridmap map[string]interface{}, numTrucks int, nc *nats.Conn) [
 			X:     x,
 			Y:     y,
 			Conn:  nc,
-			Clock: &LamportClock{}, // Added clock initialization
+			Clock: &LamportClock{},
 		}
 	}
 
@@ -172,9 +172,8 @@ func (t *FireTruck) ListenForWaterRequests() {
 		var req map[string]interface{}
 		json.Unmarshal(msg.Data, &req)
 		requester := req["truck_id"].(string)
-		needed := req["needed"].(float64)
 		requestID := req["request_id"].(string)
-		receivedTS := int(req["timestamp"].(float64)) // added timestamp field
+		receivedTS := int(req["timestamp"].(float64))
 
 		// Update Lamport clock on receive
 		t.Clock.Update(receivedTS)
@@ -186,7 +185,7 @@ func (t *FireTruck) ListenForWaterRequests() {
 
 		status := "approved"
 
-		// Mutual exclusion using Lamport timestamps + truck ID tie-break
+		// Mutual exclusion using Lamport timestamps and truck ID as tie-breaker
 		if receivedTS > t.Clock.Time() || (receivedTS == t.Clock.Time() && requester > t.ID) {
 			status = "denied"
 		}
@@ -195,7 +194,7 @@ func (t *FireTruck) ListenForWaterRequests() {
 			"approver":   t.ID,
 			"request_id": requestID,
 			"status":     status,
-			"timestamp":  t.Clock.Increment(), // include timestamp in reply
+			"timestamp":  t.Clock.Increment(),
 		}
 
 		data, _ := json.Marshal(reply)
@@ -212,7 +211,7 @@ func (t *FireTruck) RequestWater(amount float64) bool {
 		"truck_id":   t.ID,
 		"needed":     amount,
 		"request_id": fmt.Sprintf("%s-%d", t.ID, time.Now().UnixNano()),
-		"timestamp":  timestamp, // include timestamp
+		"timestamp":  timestamp,
 	}
 	data, _ := json.Marshal(request)
 
