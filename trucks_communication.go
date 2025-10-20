@@ -6,7 +6,6 @@ import (
 	"math"
 	"math/rand"
 	"time"
-
 	"github.com/nats-io/nats.go"
 )
 
@@ -67,9 +66,17 @@ func (t *FireTruck) RequestWater(amount float64) bool {
 
 	approvals := 0
 	denials := 0
+<<<<<<< Updated upstream
+=======
+	timeout := time.After(1 * time.Second)// Any messages arriving after the timeout are 
+	// ignored,which is exactly how delayed messages are handled.
+
+	// Track which trucks have replied
+>>>>>>> Stashed changes
 	repliedTrucks := make(map[string]bool)
 	deadline := time.Now().Add(1 * time.Second)
 
+<<<<<<< Updated upstream
 	for time.Now().Before(deadline) {
 		msg, err := sub.NextMsg(200 * time.Millisecond)
 		if err != nil {
@@ -96,9 +103,77 @@ func (t *FireTruck) RequestWater(amount float64) bool {
 		}
 
 		fmt.Printf("[%d] %s received '%s' from %s\n", t.Clock.Time(), t.ID, reply["status"], truckID)
+=======
+	// Collect replies from other trucks for this water request.
+collectLoop:
+	for {
+		select {
+		case <-timeout:
+			break collectLoop
+		default:
+
+			// Waits for the next message with a short timeout,
+			//if no message arrives in 200ms, error message is sent and the loop continues
+			//A way to handle message delaying 
+			msg, err := sub.NextMsg(200 * time.Millisecond)
+			if err != nil {
+				continue
+			}
+
+			var reply map[string]interface{}
+			json.Unmarshal(msg.Data, &reply)
+
+			// Update Lamport clock with reply timestamp
+			if ts, ok := reply["timestamp"].(float64); ok {
+				t.Clock.Update(int(ts))
+			}
+
+			truckID := reply["approver"].(string)
+			// if the truck is inactive or replied, it ignores and continues
+			if repliedTrucks[truckID] || !activeTrucks[truckID] {
+				continue
+			}
+		
+			repliedTrucks[truckID] = true
+
+			if reply["status"] == "approved" {
+				approvals++
+			} else {
+				denials++
+			}
+
+			fmt.Printf("[%d] %s received '%s' from %s\n", t.Clock.Time(), t.ID, reply["status"], truckID)
+		}
+
+>>>>>>> Stashed changes
 	}
 
-	requiredApprovals := 3
+	for truckID := range activeTrucks {
+		if !repliedTrucks[truckID] {
+			// Truck missed this request
+			missedResponses[truckID]++
+			fmt.Printf(" %s missed this water request (%d missed)\n", truckID, missedResponses[truckID])
+
+			// Mark inactive if missed 3 consecutive times,truck has failed
+			if missedResponses[truckID] >= 3 {
+				activeTrucks[truckID] = false
+				fmt.Printf(" %s marked as inactive due to repeated missed responses\n", truckID)
+			}
+		} else {
+			// Reset counter if replied
+			missedResponses[truckID] = 0
+		}
+	}
+
+	// handle robustness
+	totalActive := 0
+    for _, alive := range activeTrucks { // this dynamicly required approvals: majority of active trucks
+        if alive {
+            totalActive++
+        }
+	}
+
+	requiredApprovals := totalActive/2 + 1
 	fmt.Printf("[%d] %s got %d approvals / %d denials\n", t.Clock.Time(), t.ID, approvals, denials)
 
 	if approvals >= requiredApprovals {

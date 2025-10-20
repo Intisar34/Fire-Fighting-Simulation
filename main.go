@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"time"
-
 	"github.com/nats-io/nats.go"
 )
 

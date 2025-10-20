@@ -24,4 +24,7 @@ var (
 	numTrucks              = 5
 	maxWaterPerTimestep    = 50.0
 	waterDeliveredThisStep = 0.0
+	activeTrucks = make(map[string]bool) // to handle truck failures
+	missedResponses = make(map[string]int) // tracks consecutive missed replies for each truck
+
 )

@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"math/rand"
-
 	"github.com/nats-io/nats.go"
 )
 
@@ -110,11 +109,15 @@ func extinguishFire(gridmap map[string]interface{}, truck *FireTruck, fx, fy int
 		return
 	}
 
+	//get the fire ID for this
+
+	fireId:= cell["fire_id"].(string)
+
 	cell["intensity"] = 0
 	cell["fire"] = false
-	fmt.Printf("[%d] 🔥 Fire at (%d,%d) extinguished by %s!\n", truck.Clock.Increment(), fx, fy, truck.ID)
-
+	fmt.Printf(" [%d]🔥 %s extinguished by %s!\n",truck.Clock.Increment(), fireId, truck.ID)
+	
 	// Publish event to notify other trucks
-	msg := fmt.Sprintf("%s extinguished fire at (%d,%d)", truck.ID, fx, fy)
+	msg := fmt.Sprintf("%s extinguished %s)", truck.ID, fireId)//use flat naming
 	nc.Publish("fire.extinguished", []byte(msg))
 }
